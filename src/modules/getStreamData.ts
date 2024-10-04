@@ -2,59 +2,120 @@ import { playButton } from "../lib/dom";
 import { store } from "../lib/store";
 import { notify } from "../lib/utils";
 
-interface Piped {
-  title: string;
-  uploader: string;
-  duration: number;
-  uploaderUrl: string;
-  category: string;
-  liveStream: boolean;
-  subtitles: any[];
-  relatedStreams: RelatedStream[];
-  audioStreams: AudioStream[];
-}
-
-interface RelatedStream {
+interface Stream {
   url: string;
   title: string;
   uploaderName: string;
-  duration: number;
   uploaderUrl: string;
-  type: string;
+  uploaderAvatar: string;
+  uploadDate: string;
+  duration: number;
+  views: number;
+  thumbnail: string;
+  type: 'stream';
 }
 
 interface AudioStream {
   url: string;
   bitrate: number;
   codec: string;
-  contentLength: string;
-  quality: string;
   mimeType: string;
+  quality: string;
+  contentLength: string | null;
+}
+
+interface Piped {
+  title: string;
+  description: string;
+  uploadDate: string;
+  uploader: string;
+  uploaderUrl: string;
+  uploaderAvatar: string | null;
+  thumbnailUrl: string;
+  hls: string | null;
+  dash: string | null;
+  duration: number;
+  views: number;
+  likes: number;
+  dislikes: number;
+  audioStreams: AudioStream[];
+  videoStreams: any[]; // Keeping this as any[] for simplicity
+  relatedStreams: Stream[];
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  const response = await fetch(url, {
+    ...options,
+    signal: controller.signal
+  });
+  clearTimeout(id);
+  return response;
+}
+
+async function fetchPipedApi(videoId: string, instance: string): Promise<Piped> {
+  const response = await fetchWithTimeout(`${instance}/streams/${videoId}`);
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+  return response.json();
+}
+
+async function fetchCustomApi(videoId: string, apiUrl: string): Promise<Partial<Piped>> {
+  const response = await fetchWithTimeout(apiUrl.replace('{videoId}', videoId));
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+  const data = await response.json();
+  
+  // Implement custom parsing logic here based on the API response
+  // This is a basic example and should be adjusted based on the actual API response
+  return {
+    title: data.title,
+    audioStreams: [{
+      url: data.audioUrl,
+      bitrate: data.bitrate || 0,
+      codec: data.codec || '',
+      mimeType: data.mimeType || 'audio/unknown',
+      quality: data.quality || 'unknown',
+      contentLength: data.contentLength || null
+    }],
+    // Add other fields as necessary
+  };
 }
 
 export async function getData(id: string): Promise<Piped> {
-  const apis = [
-    { name: 'PipedAPI', fetch: fetchPipedApiUrl },
-    { name: 'SecondPipedAPI', fetch: fetchSecondPipedApiUrl },
-    { name: 'AceThinkerAPI', fetch: fetchAceThinkerApiUrl },
-    { name: 'NewAPI', fetch: fetchNewApiUrl },
-    { name: 'CobaltAPI', fetch: fetchCobaltApiUrl },
-    { name: 'YtdlOnlineAPI', fetch: fetchYtdlOnlineUrl }
+  const pipedInstances = [
+    'https://pipedapi.kavin.rocks',
+    'https://pipedapi.adminforge.de',
+    'https://pipedapi.syncpundit.io'
   ];
 
+  const customApis = [
+    'https://kityune.imput.net/api/json?id={videoId}',
+    'https://api.cobalt.tools/api/json',
+    'https://api.allorigins.win/raw?url=https://ytdlp.online/stream?command=https://www.youtube.com/watch?v={videoId} --get-url'
+  ];
+
+  const allApis = [...pipedInstances, ...customApis];
+
   for (let attempt = 0; attempt < 3; attempt++) {
-    for (const api of apis) {
+    for (const api of allApis) {
       try {
-        console.log(`Attempting to fetch from ${api.name}...`);
-        const data = await api.fetch(id);
-        if (data) {
-          console.log(`Success! ${api.name} returned valid data.`);
-          return formatData(data, api.name);
+        console.log(`Attempting to fetch from ${api}...`);
+        let data: Partial<Piped>;
+        
+        if (pipedInstances.includes(api)) {
+          data = await fetchPipedApi(id, api);
         } else {
-          console.log(`${api.name} did not return valid data.`);
+          data = await fetchCustomApi(id, api);
+        }
+
+        if (data && data.audioStreams && data.audioStreams.length > 0) {
+          console.log(`Success! ${api} returned valid data.`);
+          return formatData(data as Piped);
+        } else {
+          console.log(`${api} did not return valid data.`);
         }
       } catch (error) {
-        console.error(`Error fetching from ${api.name}:`, error);
+        console.error(`Error fetching from ${api}:`, error);
       }
     }
     console.log(`Retrying in ${attempt + 1} seconds...`);
@@ -69,123 +130,42 @@ export async function getData(id: string): Promise<Piped> {
   throw new Error('All APIs failed to provide valid data');
 }
 
-async function fetchPipedApiUrl(videoId: string): Promise<any> {
-  const response = await fetch(`https://pipedapi.reallyaweso.me/streams/${videoId}`);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return response.json();
-}
-
-async function fetchSecondPipedApiUrl(videoId: string): Promise<any> {
-  const response = await fetch(`https://pipedapi.adminforge.de/streams/${videoId}`);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return response.json();
-}
-
-async function fetchAceThinkerApiUrl(videoId: string): Promise<any> {
-  const encodedVideoId = encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`);
-  const apiUrl = `https://www.acethinker.com/downloader/api/video_info.php?url=${encodedVideoId}&israpid=1&ismp3=0`;
-  const response = await fetch(apiUrl);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return response.json();
-}
-
-async function fetchNewApiUrl(videoId: string): Promise<any> {
-  const response = await fetch(`https://kityune.imput.net/api/json?id=${videoId}`);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return response.json();
-}
-
-async function fetchCobaltApiUrl(videoId: string): Promise<any> {
-  const response = await fetch('https://api.cobalt.tools/api/json', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      aFormat: "mp3",
-      isAudioOnly: true,
-      audioBitrate: 8000 
-    }),
-  });
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return response.json();
-}
-
-async function fetchYtdlOnlineUrl(videoId: string): Promise<any> {
-  const response = await fetch(`https://api.allorigins.win/raw?url=https://ytdlp.online/stream?command=https://www.youtube.com/watch?v=${videoId} --get-url`, {
-
-  });
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  const responseText = await response.text();
-  const urls = responseText.split('\n')
-    .filter(line => line.trim().startsWith('data:'))
-    .map(line => line.substring(5).trim())
-    .filter(url => url.startsWith('http'));
-  return { urls };
-}
-
-function formatData(data: any, apiName: string): Piped {
-  // This function will need to be customized based on the actual structure of the data returned by each API
-  // Here's a basic implementation that you'll need to adjust:
+function formatData(data: Piped): Piped {
+  // Ensure all required fields are present, use default values if not
   return {
     title: data.title || 'Unknown Title',
-    uploader: data.uploader || data.author || 'Unknown Uploader',
-    duration: data.duration || data.lengthSeconds || 0,
-    uploaderUrl: data.uploaderUrl || data.authorUrl || '',
-    category: data.category || data.genre || 'Unknown',
-    liveStream: data.liveStream || data.liveNow || false,
-    subtitles: data.subtitles || [],
-    relatedStreams: data.relatedStreams || [],
-    audioStreams: formatAudioStreams(data, apiName),
+    description: data.description || '',
+    uploadDate: data.uploadDate || new Date().toISOString(),
+    uploader: data.uploader || 'Unknown Uploader',
+    uploaderUrl: data.uploaderUrl || '',
+    uploaderAvatar: data.uploaderAvatar || null,
+    thumbnailUrl: data.thumbnailUrl || '',
+    hls: data.hls || null,
+    dash: data.dash || null,
+    duration: data.duration || 0,
+    views: data.views || 0,
+    likes: data.likes || 0,
+    dislikes: data.dislikes || 0,
+    audioStreams: data.audioStreams.map(stream => ({
+      url: stream.url,
+      bitrate: stream.bitrate || 0,
+      codec: stream.codec || '',
+      mimeType: stream.mimeType || 'audio/unknown',
+      quality: stream.quality || 'unknown',
+      contentLength: stream.contentLength || null
+    })),
+    videoStreams: data.videoStreams || [],
+    relatedStreams: (data.relatedStreams || []).map(stream => ({
+      url: stream.url,
+      title: stream.title || 'Unknown Title',
+      uploaderName: stream.uploaderName || 'Unknown Uploader',
+      uploaderUrl: stream.uploaderUrl || '',
+      uploaderAvatar: stream.uploaderAvatar || '',
+      uploadDate: stream.uploadDate || new Date().toISOString(),
+      duration: stream.duration || 0,
+      views: stream.views || 0,
+      thumbnail: stream.thumbnail || '',
+      type: 'stream'
+    }))
   };
-}
-
-function formatAudioStreams(data: any, apiName: string): AudioStream[] {
-  // This function will need to be customized based on the actual structure of the audio data returned by each API
-  // Here's a basic implementation that you'll need to adjust:
-  switch (apiName) {
-    case 'PipedAPI':
-    case 'SecondPipedAPI':
-      return data.audioStreams || [];
-    case 'AceThinkerAPI':
-      return data.links.flat().filter((link: any) => link.ext === 'weba').map((link: any) => ({
-        url: link.url,
-        bitrate: 0,
-        codec: '',
-        contentLength: '',
-        quality: '',
-        mimeType: 'audio/webm',
-      }));
-    case 'NewAPI':
-      return data.status === 'stream' && data.url ? [{
-        url: data.url,
-        bitrate: 0,
-        codec: '',
-        contentLength: '',
-        quality: '',
-        mimeType: 'audio/unknown',
-      }] : [];
-    case 'CobaltAPI':
-      return (data.audio || data.url) ? [{
-        url: data.audio || data.url,
-        bitrate: 8000,
-        codec: '',
-        contentLength: '',
-        quality: '8 kbps',
-        mimeType: 'audio/mp3',
-      }] : [];
-    case 'YtdlOnlineAPI':
-      return data.urls.map((url: string) => ({
-        url,
-        bitrate: 0,
-        codec: '',
-        contentLength: '',
-        quality: '',
-        mimeType: 'audio/unknown',
-      }));
-    default:
-      return [];
-  }
 }
